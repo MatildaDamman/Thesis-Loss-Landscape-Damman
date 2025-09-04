@@ -62,7 +62,7 @@ def h5_to_vtp(surf_file, surf_name='train_loss', log=False, zmax=-1, interp=-1):
         z_array = np.log(z_array + 0.1)
         vtp_file +=  "_log"
     vtp_file +=  ".vtp"
-    print("Here's your output file:{}".format(vtp_file))
+    print("output file:{}".format(vtp_file))
 
     number_points = len(z_array)
     print("number_points = {} points".format(number_points))

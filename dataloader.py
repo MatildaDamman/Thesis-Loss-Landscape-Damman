@@ -81,9 +81,6 @@ def load_dataset(dataset='cifar10', datapath='cifar10/data', batch_size=128, \
     return train_loader, test_loader
 
 
-###############################################################
-####                        MAIN
-###############################################################
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
