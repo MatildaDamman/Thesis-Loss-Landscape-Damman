@@ -4,26 +4,44 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import os
-from simple_cnn import SimpleCNN
+from simple_cnn import SimpleCNN, SimpleXORNet
+import pandas as pd
+from torch.utils.data import TensorDataset, DataLoader
+import argparse
 
 # Model (using a simple CNN for quick training)
 #NEW
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', default='cifar10')
+    parser.add_argument('--datapath', default='cifar10/data')
+    parser.add_argument('--model', default='custom_cnn')
+    args = parser.parse_args()
+    
     # Create checkpoints directory
     os.makedirs('checkpoints', exist_ok=True)
 
-    # Data preparation
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
-
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=2)
-
-    # Initialize model
-    model = SimpleCNN()
+    if args.dataset == 'xor' or args.model == 'xor':
+        # Load XOR dataset from CSV
+        df = pd.read_csv(args.datapath)
+        X = df.iloc[:, :-1].values.astype('float32')
+        y = df.iloc[:, -1].values.astype('int64')
+        tensor_x = torch.tensor(X)
+        tensor_y = torch.tensor(y)
+        trainset = TensorDataset(tensor_x, tensor_y)
+        trainloader = DataLoader(trainset, batch_size=128, shuffle=True, num_workers=2)
+        model = SimpleXORNet()
+    else:
+        # CIFAR-10
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+        trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+        trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=2)
+        model = SimpleCNN()
+        
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
@@ -32,7 +50,7 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     # Training loop with checkpoints
-    total_epochs = 10  # We'll save 10 checkpoints
+    total_epochs = 20  # We'll save 10 checkpoints
 
     for epoch in range(total_epochs):
         running_loss = 0.0

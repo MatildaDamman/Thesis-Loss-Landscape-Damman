@@ -15,7 +15,7 @@ def load_h5_surface(filename):
     return x, y, z
 
 # Preload data for all epochs
-epochs = 10
+epochs = 50
 surfaces = []
 for epoch in range(epochs):
     try:
@@ -45,5 +45,5 @@ def update(epoch):
 
 ani = animation.FuncAnimation(fig, update, frames=epochs, interval=500)
 
-ani.save('loss_landscape_evolution.gif', writer='pillow', fps=2)
-print("Animation saved as 'loss_landscape done")
+ani.save('loss_landscape_evolution1.gif', writer='pillow', fps=9)
+print("Animation saved as 'loss_landscape1 done")

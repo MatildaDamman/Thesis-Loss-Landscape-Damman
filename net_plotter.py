@@ -38,6 +38,8 @@ def set_weights(net, weights, directions=None, step=None):
 
         for (p, w, d) in zip(net.parameters(), weights, changes):
             p.data = w + torch.Tensor(d).type(type(w))
+            #device = w.device if hasattr(w, 'device') else torch.device('cpu')
+            #p.data = w + torch.tensor(d, dtype=w.dtype, device=device)
 
 
 def set_states(net, states, directions=None, step=None):

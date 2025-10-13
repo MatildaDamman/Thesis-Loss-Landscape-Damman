@@ -1,5 +1,5 @@
 """
-    Calculate and visualize the loss surface.
+    Calculate and visualize the loss surface. #For one epoch
     Usage example:
     >>  python plot_surface.py --x=-1:1:101 --y=-1:1:101 --model resnet56 --cuda
 """
@@ -23,6 +23,7 @@ import plot_1D
 import model_loader
 import scheduler
 import mpi4pytorch as mpi
+from simple_cnn import SimpleCNN, SimpleXORNet
 import matplotlib
 matplotlib.use('Agg')
 
@@ -72,8 +73,8 @@ def setup_surface_file(args, surf_file, dir_file):
     return surf_file
 
 
-
-def crunch(surf_file, net, w, s, d, dataloader, loss_key, acc_key, comm, rank, args):
+def crunch(surf_file, net, w, s, d, dataloader, loss_key, acc_key, comm, rank, args, epoch=None):
+#def crunch(surf_file, net, w, s, d, dataloader, loss_key, acc_key, comm, rank, args):
     """
         Calculate the loss values and accuracies of modified models in parallel
         using MPI reduce.
@@ -100,6 +101,7 @@ def crunch(surf_file, net, w, s, d, dataloader, loss_key, acc_key, comm, rank, a
     # stored in 'd') are stored in 'coords'.
     inds, coords, inds_nums = scheduler.get_job_indices(losses, xcoordinates, ycoordinates, comm)
 
+    #need to change this to work over all iterations, now it just says for 'rank 0'
     print('Computing %d values for rank %d'% (len(inds), rank))
     start_time = time.time()
     total_sync = 0.0
@@ -141,10 +143,14 @@ def crunch(surf_file, net, w, s, d, dataloader, loss_key, acc_key, comm, rank, a
             f[acc_key][:] = accuracies
             f.flush()
 
-        print('Evaluating rank %d  %d/%d  (%.1f%%)  coord=%s \t%s= %.3f \t%s=%.2f \ttime=%.2f \tsync=%.2f' % (
-                rank, count, len(inds), 100.0 * count/len(inds), str(coord), loss_key, loss,
-                acc_key, acc, loss_compute_time, syc_time))
-
+#need to change this
+        #print('Evaluating rank %d  %d/%d  (%.1f%%)  coord=%s \t%s= %.3f \t%s=%.2f \ttime=%.2f \tsync=%.2f' % (
+               # rank, count, len(inds), 100.0 * count/len(inds), str(coord), loss_key, loss,
+                #acc_key, acc, loss_compute_time, syc_time))
+        print('Epoch %s | rank %d  %d/%d  (%.1f%%)  coord=%s \t%s= %.3f \t%s=%.2f \ttime=%.2f \tsync=%.2f' % (
+            str(epoch) if epoch is not None else '?', rank, count, len(inds), 100.0 * count/len(inds), str(coord), loss_key, loss,
+            acc_key, acc, loss_compute_time, syc_time))
+        
     # This is only needed to make MPI run smoothly. If this process has less work than
     # the rank0 process, then we need to keep calling reduce so the rank0 process doesn't block
     for i in range(max(inds_nums) - len(inds)):
@@ -152,6 +158,8 @@ def crunch(surf_file, net, w, s, d, dataloader, loss_key, acc_key, comm, rank, a
         accuracies = mpi.reduce_max(comm, accuracies)
 
     total_time = time.time() - start_time
+    
+    #need to change this to work over all iterations, now it just says for 'rank 0'
     print('Rank %d done!  Total time: %.2f Sync: %.2f' % (rank, total_time, total_sync))
 
     f.close()
@@ -276,8 +284,13 @@ if __name__ == '__main__':
     # Setup dataloader
     #--------------------------------------------------------------------------
     # download CIFAR10 if it does not exit
+    
+    
     if rank == 0 and args.dataset == 'cifar10':
         torchvision.datasets.CIFAR10(root=args.dataset + '/data', train=True, download=True)
+    elif rank == 0 and args.dataset == 'xor':
+        # No download needed for XOR dataset
+        pass
 
     mpi.barrier(comm)
 
@@ -289,12 +302,12 @@ if __name__ == '__main__':
     #--------------------------------------------------------------------------
     # Start the computation
     #--------------------------------------------------------------------------
-    crunch(surf_file, net, w, s, d, trainloader, 'train_loss', 'train_acc', comm, rank, args)
-    # crunch(surf_file, net, w, s, d, testloader, 'test_loss', 'test_acc', comm, rank, args)
+    crunch(surf_file, net, w, s, d, trainloader, 'train_loss', 'train_acc', scheduler_comm, scheduler_rank, args, epoch=epoch)
 
     #--------------------------------------------------------------------------
     # Plot figures
     #--------------------------------------------------------------------------
+    #This code only runs for rank == 0 because, in an MPI (parallel/distributed) environment, multiple processes are running the same script simultaneously. 
     if args.plot and rank == 0:
         if args.y and args.proj_file:
             plot_2D.plot_contour_trajectory(surf_file, dir_file, args.proj_file, 'train_loss', args.show)

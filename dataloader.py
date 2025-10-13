@@ -4,6 +4,8 @@ from torchvision import transforms
 import os
 import numpy as np
 import argparse
+import pandas as pd
+from torch.utils.data import TensorDataset, DataLoader
 
 def get_relative_path(file):
     script_dir = os.path.dirname(__file__)  # <-- absolute dir the script is in
@@ -36,6 +38,18 @@ def load_dataset(dataset='cifar10', datapath='cifar10/data', batch_size=128, \
 
     assert split_idx < data_split, 'the index of data partition should be smaller than the total number of split'
 
+    
+    if dataset == 'xor':
+        df = pd.read_csv(datapath)
+        X = df.iloc[:, :-1].values.astype('float32')
+        y = df.iloc[:, -1].values.astype('int64')
+        tensor_x = torch.tensor(X)
+        tensor_y = torch.tensor(y)
+        xor_dataset = TensorDataset(tensor_x, tensor_y)
+        train_loader = DataLoader(xor_dataset, batch_size=batch_size, shuffle=True, num_workers=threads)
+        test_loader = DataLoader(xor_dataset, batch_size=batch_size, shuffle=False, num_workers=threads)
+        return train_loader, test_loader
+    
     if dataset == 'cifar10':
         normalize = transforms.Normalize(mean=[x/255.0 for x in [125.3, 123.0, 113.9]],
                                          std=[x/255.0 for x in [63.0, 62.1, 66.7]])

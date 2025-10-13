@@ -1,4 +1,6 @@
 import torch
+import pandas as pd
+from torch.utils.data import TensorDataset, DataLoader
 import torch.nn as nn
 
 class SimpleCNN(nn.Module):
@@ -19,3 +21,17 @@ class SimpleCNN(nn.Module):
         x = torch.relu(self.fc2(x))
         x = self.fc3(x)
         return x
+    
+import torch.nn as nn
+
+class SimpleXORNet(nn.Module):
+    def __init__(self):
+        super(SimpleXORNet, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(2, 8),
+            nn.ReLU(),
+            nn.Linear(8, 2)
+        )
+    def forward(self, x):
+        return self.fc(x)    
+#2,2,3
