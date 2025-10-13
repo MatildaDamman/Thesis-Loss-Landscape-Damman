@@ -1,3 +1,12 @@
+steps to run dashboard
+steps:
+1. python train_model_new.py --dataset xor --datapath Xor_Dataset.csv --model xor
+2. python batch_plot_new_new.py —num_workers 3
+3. python create_animation
+4. python dashboard2.py
+
+
+
 # Visualizing the Loss Landscape of Neural Nets
 
 
