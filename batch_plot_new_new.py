@@ -31,7 +31,7 @@ PCA_DIRECTIONS_FILE = 'pca_gradient_directions.h5'
 
 def compute_surface_for_epoch(epoch):
     epochs = EPOCHS  # Use the global value
-    trainloader, _ = dataloader.load_dataset(DATASET, DATAPATH, BATCH_SIZE, 0)
+    trainloader, _ = dataloader.load_dataset(DATASET, DATAPATH, BATCH_SIZE, 0, model_type=MODEL)
     model_file = os.path.join(CHECKPOINT_DIR, f"model_epoch_{epoch}.pth")  # No zero-padding
     if not os.path.exists(model_file):
         print(f"Checkpoint {model_file} not found, skipping.")
@@ -135,6 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_dir', default='checkpoints', help='Directory containing model checkpoints')
     parser.add_argument('--surface_dir', default='surfaces', help='Directory to save surface files')
     parser.add_argument('--epochs', default=50, type=int, help='Number of epochs to process')
+    parser.add_argument('--start_epoch', default=0, type=int, help='Starting epoch for resume (default: 0)')
     parser.add_argument('--x_range', default='(-1,1,101)', help='X range as (min,max,num)')
     parser.add_argument('--y_range', default='(-1,1,101)', help='Y range as (min,max,num)')
     parser.add_argument('--num_workers', default=8, type=int, help='Number of worker processes')
@@ -167,26 +168,32 @@ if __name__ == '__main__':
     # Create output directory
     os.makedirs(SURFACE_DIR, exist_ok=True)
     
-    # Auto-detect which checkpoints exist instead of processing all epochs
-    print("🔍 Auto-detecting available checkpoints...")
+    # Auto-detect which checkpoints exist and need processing
+    print(" Auto-detecting available checkpoints...")
     checkpoint_files = []
     available_epochs = []
     
-    for epoch in range(args.epochs):
+    for epoch in range(args.start_epoch, args.epochs):
         checkpoint_path = os.path.join(CHECKPOINT_DIR, f"model_epoch_{epoch}.pth")
+        surface_path = os.path.join(SURFACE_DIR, f"surface_epoch_{epoch}.h5")
+        
         if os.path.exists(checkpoint_path):
-            checkpoint_files.append(checkpoint_path)
-            available_epochs.append(epoch)
+            # Only process if surface file doesn't exist (resume capability)
+            if not os.path.exists(surface_path):
+                checkpoint_files.append(checkpoint_path)
+                available_epochs.append(epoch)
+            else:
+                print(f"⏭️  Skipping epoch {epoch} - surface file already exists")
     
-    print(f"✅ Found {len(available_epochs)} checkpoints: {available_epochs}")
+    print(f" Found {len(available_epochs)} checkpoints: {available_epochs}")
     
     # Limit epochs if max_epochs is specified
     if args.max_epochs and len(available_epochs) > args.max_epochs:
         available_epochs = available_epochs[:args.max_epochs]
-        print(f"🔄 Limited to first {args.max_epochs} epochs: {available_epochs}")
+        print(f"Limited to first {args.max_epochs} epochs: {available_epochs}")
     
     if not available_epochs:
-        print("❌ No checkpoints found! Please run training first.")
+        print(" No checkpoints found! Please run training first.")
         sys.exit(1)
     
     print(f"Using PCA directions from: {PCA_DIRECTIONS_FILE}")
@@ -195,7 +202,7 @@ if __name__ == '__main__':
     
     # Process only available epochs sequentially to avoid file conflicts
     for i, epoch in enumerate(available_epochs):
-        print(f"📊 Processing epoch {epoch} ({i+1}/{len(available_epochs)})...")
+        print(f"Processing epoch {epoch} ({i+1}/{len(available_epochs)})...")
         compute_surface_for_epoch(epoch)
     
-    print(f"✅ Completed processing {len(available_epochs)} epochs!")
+    print(f"Completed processing {len(available_epochs)} epochs!")

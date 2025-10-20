@@ -34,4 +34,16 @@ class SimpleXORNet(nn.Module):
         )
     def forward(self, x):
         return self.fc(x)    
-#2,2,3
+#2,8,2
+
+class SimpleXORNet_332(nn.Module):
+    def __init__(self):
+        super(SimpleXORNet_332, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(3, 3),
+            nn.ReLU(),
+            nn.Linear(3, 2)
+        )
+    def forward(self, x):
+        return self.fc(x)    
+#3,3,2

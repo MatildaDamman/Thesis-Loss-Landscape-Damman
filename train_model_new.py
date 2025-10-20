@@ -4,7 +4,7 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import os
-from simple_cnn import SimpleCNN, SimpleXORNet
+from simple_cnn import SimpleCNN, SimpleXORNet, SimpleXORNet_332
 import pandas as pd
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
@@ -13,7 +13,6 @@ from sklearn.decomposition import PCA
 import h5py
 import h5_util
 
-print("✅ All imports successful!")
 
 # Model (using a simple CNN for quick training)
 #NEW
@@ -91,8 +90,6 @@ def create_pca_directions_from_gradients(all_gradients, model, n_components=2, s
     return save_path
 
 def main():
-    print("🚀 Starting training script...")
-    print("📦 Parsing arguments...")
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', default='cifar10')
@@ -100,29 +97,42 @@ def main():
     parser.add_argument('--model', default='custom_cnn')
     args = parser.parse_args()
     
-    print(f"📝 Arguments: dataset={args.dataset}, datapath={args.datapath}, model={args.model}")
+    print(f"Arguments: dataset={args.dataset}, datapath={args.datapath}, model={args.model}")
     
     # Create necessary directories
-    print("📁 Creating directories...")
+    print("Creating directories...")
     os.makedirs('checkpoints', exist_ok=True)
     os.makedirs('gradients', exist_ok=True)
 
     if args.dataset == 'xor' or args.model == 'xor':
-        print("📊 Loading XOR dataset...")
+        print(" Loading XOR dataset...")
         # Load XOR dataset from CSV
         try:
             df = pd.read_csv(args.datapath)
-            print(f"✅ Loaded {len(df)} samples from {args.datapath}")
+            print(f"Loaded {len(df)} samples from {args.datapath}")
         except Exception as e:
-            print(f"❌ Error loading dataset: {e}")
+            print(f" Error loading dataset: {e}")
             return
+        
         X = df.iloc[:, :-1].values.astype('float32')
         y = df.iloc[:, -1].values.astype('int64')
+        
+        # Check if we want 3,3,2 architecture
+        if args.model == 'xor_332':
+            print(" Using 3,3,2 architecture - adding interaction feature...")
+            # Add interaction feature: X*Y as third input
+            interaction_feature = (X[:, 0] * X[:, 1]).reshape(-1, 1)
+            X = np.concatenate([X, interaction_feature], axis=1)
+            print(f" Extended input from 2D to 3D: {X.shape}")
+            model = SimpleXORNet_332()
+        else:
+            print(" Using default 2,8,2 architecture...")
+            model = SimpleXORNet()
+            
         tensor_x = torch.tensor(X)
         tensor_y = torch.tensor(y)
         trainset = TensorDataset(tensor_x, tensor_y)
         trainloader = DataLoader(trainset, batch_size=128, shuffle=True, num_workers=3)
-        model = SimpleXORNet()
     else:
         # CIFAR-10
         transform = transforms.Compose([
@@ -202,9 +212,9 @@ def main():
 
 if __name__ == '__main__':
     try:
-        print("🏃 Starting main function...")
+        print("Starting main function...")
         main()
     except Exception as e:
-        print(f"❌ Error in main: {e}")
+        print(f" Error in main: {e}")
         import traceback
         traceback.print_exc()

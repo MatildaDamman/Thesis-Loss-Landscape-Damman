@@ -1,3 +1,5 @@
+# ---- MAIN ENTRY POINT ----
+# (Moved to end of file)
 import dash
 from dash import dcc, html, Input, Output, State
 import plotly.graph_objs as go
@@ -8,24 +10,42 @@ import base64
 import io
 import os
 
-# ---- CONFIGURATION ----
-EPOCHS = 50
-SURFACE_PATH_FMT = 'surfaces/surface_epoch_{}.h5'
-GIF_PATH = 'loss_landscape_evolution1.gif'
+# --- GIF FRAME CACHE ---
+_gif_frame_cache = {}
 
-# ---- LOAD GIF FRAMES ----
-def load_gif_frames(path):
-    img = Image.open(path)
+def load_gif_frames(run_folder):
+    if run_folder in _gif_frame_cache:
+        return _gif_frame_cache[run_folder]
+    gif_path = get_gif_path(run_folder)
+    img = Image.open(gif_path)
     frames = [f.copy().convert('RGBA') for f in ImageSequence.Iterator(img)]
     buf_list = []
     for frame in frames:
         buf = io.BytesIO()
         frame.save(buf, format='PNG')
         buf_list.append(buf.getvalue())
+    _gif_frame_cache[run_folder] = buf_list
     return buf_list
 
-gif_frames = load_gif_frames(GIF_PATH)
-gif_total_frames = len(gif_frames)
+# ---- CONFIGURATION ----
+EPOCHS = 50
+DEFAULT_RUN = '50_-1,1,101 (2,8,2 PCA)'
+RUN_FOLDERS = {
+    '50_-1,1,101 (2,8,2 PCA)': '50_-1,1,101 (2,8,2 PCA)',
+    '50_-1,1,101 (2,8,2 RANDOM)': '50_-1,1,101 (2,8,2 RANDOM)',
+    '50_-1,1,101 (3,3,2 PCA)': '50_-1,1,101 (3,3,2 PCA)',
+    '50_-1,1,101 (3,3,2 RANDOM)': '50_-1,1,101 (3,3,2 RANDOM)',
+}
+
+def get_surface_path_fmt(run_folder):
+    return os.path.join(run_folder, 'surfaces/surface_epoch_{}.h5')
+
+def get_gif_path(run_folder):
+    return os.path.join(run_folder, 'loss_landscape_evolution1.gif')
+
+# ---- LOAD GIF FRAMES ----
+
+# --- GIF FRAME CACHE ---
 
 def pil_image_to_base64(img_bytes):
     return 'data:image/png;base64,' + base64.b64encode(img_bytes).decode('ascii')
@@ -39,8 +59,8 @@ UQ_WHITE = "#ffffff"
 UQ_BACKGROUND = "#f9f9f9"
 
 # ---- LOAD SURFACES ----
-def load_surface(epoch):
-    fname = SURFACE_PATH_FMT.format(epoch)
+def load_surface(epoch, run_folder=DEFAULT_RUN):
+    fname = get_surface_path_fmt(run_folder).format(epoch)
     if not os.path.exists(fname):
         return None, None, None
     with h5py.File(fname, 'r') as f:
@@ -49,8 +69,8 @@ def load_surface(epoch):
         z = np.array(f['train_loss'][:])
     return x, y, z
 
-def make_surface_fig(epoch):
-    x, y, z = load_surface(epoch)
+def make_surface_fig(epoch, run_folder=DEFAULT_RUN):
+    x, y, z = load_surface(epoch, run_folder)
     if x is None:
         return go.Figure()
     X, Y = np.meshgrid(x, y)
@@ -69,8 +89,8 @@ def make_surface_fig(epoch):
             zaxis_title='Loss',
             aspectmode='cube',
             camera=dict(
-                eye=dict(x=1.35, y=1.35, z=1.35),  # Zoom out by ~8% (default is 1.25)
-                center=dict(x=0, y=0, z=-0.2)  # Raise the view by a few units
+                eye=dict(x=1.35, y=1.35, z=1.35),
+                center=dict(x=0, y=0, z=-0.2)
             ),
             xaxis=dict(titlefont=dict(color=UQ_PURPLE)),
             yaxis=dict(titlefont=dict(color=UQ_PURPLE)),
@@ -83,10 +103,10 @@ def make_surface_fig(epoch):
     )
     return fig
 
-def make_gradient_angle_fig(current_epoch):
+def make_gradient_angle_fig(current_epoch, total_epochs):
     """Generate gradient vector angle plot over training steps"""
     # Generate sample gradient angle data (replace with real gradient data if available)
-    epochs = list(range(min(gif_total_frames, 50)))  # Limit to available epochs
+    epochs = list(range(min(total_epochs, 50)))  # Limit to available epochs
     
     # Simulate gradient vector angles (replace with actual gradient calculations)
     np.random.seed(42)  # For reproducible demo data
@@ -147,10 +167,10 @@ def make_gradient_angle_fig(current_epoch):
     
     return fig
 
-def make_avg_gradient_angle_fig():
+def make_avg_gradient_angle_fig(total_epochs):
     """Generate static average gradient angle plot over all epochs"""
     # Generate sample gradient angle data (replace with real gradient data if available)
-    epochs = list(range(min(gif_total_frames, 50)))  # Limit to available epochs
+    epochs = list(range(min(total_epochs, 50)))  # Limit to available epochs
     
     # Simulate gradient vector angles (replace with actual gradient calculations)
     np.random.seed(42)  # For reproducible demo data
@@ -212,11 +232,10 @@ def make_avg_gradient_angle_fig():
     
     return fig
 
-def make_pca_overlay_fig(current_epoch):
+def make_pca_overlay_fig(current_epoch, run_folder=DEFAULT_RUN):
     """Generate PCA overlay plot showing principal directions on loss landscape"""
-    x, y, z = load_surface(current_epoch)
+    x, y, z = load_surface(current_epoch, run_folder)
     if x is None:
-        # Return empty figure if no surface data
         fig = go.Figure()
         fig.update_layout(
             title="No surface data available",
@@ -225,13 +244,8 @@ def make_pca_overlay_fig(current_epoch):
             font=dict(family="Montserrat", color=UQ_PURPLE)
         )
         return fig
-    
     X, Y = np.meshgrid(x, y)
-    
-    # Create base contour plot
     fig = go.Figure()
-    
-    # Add contour plot of the loss landscape
     fig.add_trace(go.Contour(
         z=z, x=x, y=y,
         colorscale='Viridis',
@@ -243,9 +257,7 @@ def make_pca_overlay_fig(current_epoch):
             labelfont=dict(size=10, color='white')
         )
     ))
-    
     # Simulate PCA directions (replace with actual PCA calculation)
-    # Principal component 1 (direction of greatest variance)
     pca1_direction = np.array([0.8, 0.6])  # Example direction vector
     pca1_magnitude = 0.7  # Scale factor
     
@@ -498,10 +510,10 @@ def make_trajectory_overlay_fig(current_epoch):
     
     return fig
 
-def make_eigenvalues_plot(current_epoch):
+def make_eigenvalues_plot(current_epoch, total_epochs):
     """Generate Hessian eigenvalues time series plot"""
     # Generate simulated eigenvalue data (replace with actual PyHessian calculations)
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     
     np.random.seed(456)  # For reproducible eigenvalue data
     
@@ -1000,10 +1012,10 @@ def make_persistence_diagram(current_epoch):
     
     return fig
 
-def make_critical_points_evolution(current_epoch):
+def make_critical_points_evolution(current_epoch, total_epochs):
     """Generate critical points evolution plot"""
     # Simulate critical points data over training
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     
     np.random.seed(1100)
     
@@ -1231,10 +1243,10 @@ def make_topology_timeline(current_epoch):
     
     return fig
 
-def make_avg_loss_landscape():
+def make_avg_loss_landscape(total_epochs):
     """Generate average loss landscape over all epochs"""
     # Simulate averaging loss landscapes across all epochs
-    all_epochs = list(range(min(gif_total_frames, 50)))
+    all_epochs = list(range(min(total_epochs, 50)))
     
     # Use first epoch's coordinates as template
     x, y, z_template = load_surface(0)
@@ -1294,9 +1306,9 @@ def make_avg_loss_landscape():
     
     return fig
 
-def make_avg_curvature_distribution():
+def make_avg_curvature_distribution(total_epochs):
     """Generate average curvature distribution across all epochs"""
-    all_epochs = list(range(min(gif_total_frames, 50)))
+    all_epochs = list(range(min(total_epochs, 50)))
     
     # Simulate curvature distributions across epochs
     np.random.seed(1000)
@@ -1376,9 +1388,9 @@ def make_avg_curvature_distribution():
     
     return fig
 
-def make_eigenvalue_evolution_summary():
+def make_eigenvalue_evolution_summary(total_epochs):
     """Generate eigenvalue evolution summary with confidence bands"""
-    all_epochs = list(range(min(gif_total_frames, 50)))
+    all_epochs = list(range(min(total_epochs, 50)))
     
     # Simulate eigenvalue evolution with confidence intervals
     np.random.seed(1001)
@@ -1616,7 +1628,7 @@ def make_complexity_metrics_plot(current_epoch):
     complexity = landscape_complexity_metrics(z)
     
     # Create time series for all epochs
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     complexities = []
     
     for epoch in epochs:
@@ -1698,10 +1710,10 @@ def make_complexity_metrics_plot(current_epoch):
     
     return fig
 
-def make_critical_points_plot(current_epoch):
+def make_critical_points_plot(current_epoch, total_epochs):
     """Generate critical points classification visualization"""
     # Simulate critical points analysis over time
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     
     np.random.seed(999 + current_epoch)
     
@@ -1822,7 +1834,7 @@ def make_critical_points_plot(current_epoch):
     
     return fig
 
-def make_sharpness_metrics_plot(current_epoch):
+def make_complexity_metrics_plot(current_epoch, total_epochs):
     """Generate sharpness/flatness metrics visualization"""
     x, y, z = load_surface(current_epoch)
     if x is None:
@@ -1836,9 +1848,8 @@ def make_sharpness_metrics_plot(current_epoch):
         return fig
     
     # Calculate sharpness metrics for all epochs
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     sharpness_data = []
-    
     for epoch in epochs:
         x_e, y_e, z_e = load_surface(epoch)
         if z_e is not None:
@@ -1921,9 +1932,9 @@ def make_sharpness_metrics_plot(current_epoch):
     
     return fig
 
-def make_complexity_evolution_plot():
+def make_complexity_evolution_plot(total_epochs):
     """Generate comprehensive complexity evolution across all epochs"""
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     complexities = []
     
     for epoch in epochs:
@@ -2012,9 +2023,9 @@ def make_complexity_evolution_plot():
     
     return fig
 
-def make_critical_points_evolution_plot():
+def make_critical_points_evolution_plot(total_epochs):
     """Generate comprehensive critical points evolution across all epochs"""
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     
     np.random.seed(999)
     
@@ -2150,9 +2161,9 @@ def make_critical_points_evolution_plot():
     
     return fig
 
-def make_sharpness_evolution_plot():
+def make_sharpness_evolution_plot(total_epochs):
     """Generate comprehensive sharpness evolution across all epochs"""
-    epochs = list(range(min(gif_total_frames, 50)))
+    epochs = list(range(min(total_epochs, 50)))
     sharpness_data = []
     
     for epoch in epochs:
@@ -2283,13 +2294,31 @@ app = dash.Dash(
 
 app.layout = html.Div([
     # UQ Header Banner
+    # UQ Header Banner
     html.Header([
         html.Div(className="uq-banner", children=[
-            html.Img(src="https://static.uq.net.au/v3/logos/uq-lockup-rgb-white.svg", className="uq-logo"),
+            html.Img(src="/assets/icon.png", className="uq-logo"),
             html.H1("Neural Network Loss Landscape Evolution", className="banner-title")
         ])
     ]),
     
+    # Run Selection Dropdown
+    html.Div([
+        html.Label('Select Run:', style={'font-weight': 'bold', 'margin-right': '1rem'}),
+        dcc.Dropdown(
+            id='run-selector',
+            options=[
+                {'label': '2,8,2 PCA', 'value': '50_-1,1,101 (2,8,2 PCA)'},
+                {'label': '2,8,2 RANDOM', 'value': '50_-1,1,101 (2,8,2 RANDOM)'},
+                {'label': '3,3,2 PCA', 'value': '50_-1,1,101 (3,3,2 PCA)'},
+                {'label': '3,3,2 RANDOM', 'value': '50_-1,1,101 (3,3,2 RANDOM)'},
+            ],
+            value='50_-1,1,101 (2,8,2 PCA)',
+            clearable=False,
+            style={'width': '300px'}
+        ),
+        dcc.Store(id='gif-frame-count'),
+    ], style={'padding': '1rem', 'background': UQ_LIGHT_GREY, 'border-radius': '8px', 'margin-bottom': '1rem', 'display': 'flex', 'align-items': 'center'}),
     # Main Content Area
     html.Div(className="main-wrapper", children=[
         # Navigation Sidebar
@@ -2319,13 +2348,20 @@ app.layout = html.Div([
                     'font-size': '1.8rem',
                     'font-weight': '700'
                 }),
-                html.P("PCA-based Loss Landscape Visualization | Dataset: XOR | Dimensions: [-1, 1, 101] × [-1, 1, 101]", style={
-                    'color': UQ_GREY,
-                    'margin': '0',
-                    'font-size': '1.1rem',
-                    'font-weight': '500'
-                })
+                dcc.Loading(
+                    id="dynamic-title-loading",
+                    type="default",
+                    children=[
+                        html.P(id="dynamic-title", style={
+                            'color': UQ_GREY,
+                            'margin': '0',
+                            'font-size': '1.1rem',
+                            'font-weight': '500'
+                        })
+                    ]
+                )
             ]),
+            # (comma added above)
             
             # Controls Section
             html.Section(id="controls-section", children=[
@@ -2338,9 +2374,11 @@ app.layout = html.Div([
                         html.Label("Epoch:", style={'color': UQ_PURPLE, 'font-weight': '600', 'margin-right': '10px'}),
                         dcc.Slider(
                             id='gif-slider',
-                            min=0, max=gif_total_frames-1,
-                            value=0, step=1,
-                            marks={i: str(i) for i in range(0, gif_total_frames, max(1, gif_total_frames//10))},
+                            min=0,
+                            max=EPOCHS-1, # will be updated by callback
+                            value=0,
+                            step=1,
+                            marks={i: str(i) for i in range(0, EPOCHS, max(1, EPOCHS//10))}, # will be updated by callback
                             className="uq-slider",
                         ),
                     ], style={'flex': '1', 'min-width': '300px'})
@@ -2362,8 +2400,8 @@ app.layout = html.Div([
                     html.H3("Loss Landscape Animation", style={'margin-top': '0'}),
                     html.Div([
                         html.Img(id='gif-display', style={
-                            'width': '125%', 
-                            'height': '125%', 
+                            'width': '120%', 
+                            'height': '120%', 
                             'object-fit': 'contain', 
                             'border-radius': '8px', 
                             'border': f'2px solid {UQ_LIGHT_GREY}'
@@ -2730,8 +2768,21 @@ app.layout = html.Div([
     
     # Hidden Components
     dcc.Interval(id='gif-interval', interval=180, n_intervals=0, disabled=True),
-    html.Div(id='last-clicked-epoch', style={'display': 'none'}, children='0'),
+    html.Div(id='last-clicked-epoch', style={'display': 'none'}, children='0')
 ], style={'font-family': 'Montserrat, Arial, Helvetica, sans-serif', 'background': UQ_BACKGROUND, 'min-height': '100vh'})
+
+# ---- CALLBACK: UPDATE GIF FRAME COUNT AND SLIDER ----
+@app.callback(
+    Output('gif-frame-count', 'data'),
+    Output('gif-slider', 'max'),
+    Output('gif-slider', 'marks'),
+    Input('run-selector', 'value'),
+)
+def update_gif_frame_count(run_folder):
+    gif_frames = load_gif_frames(run_folder)
+    gif_total_frames = len(gif_frames)
+    marks = {i: str(i) for i in range(0, gif_total_frames, max(1, gif_total_frames//10))}
+    return gif_total_frames, gif_total_frames-1, marks
 
 # ---- CALLBACK FOR PLAY/PAUSE TOGGLE BUTTON ----
 @app.callback(
@@ -2759,22 +2810,45 @@ def toggle_play_pause(n_clicks, interval_disabled):
     Output('gif-slider', 'value'),
     Input('gif-slider', 'value'),
     Input('gif-interval', 'n_intervals'),
+    Input('run-selector', 'value'),
     State('gif-interval', 'disabled'),
+    State('gif-frame-count', 'data'),
     prevent_initial_call=False
 )
-def update_gif_frame(epoch, n_intervals, interval_disabled):
+def update_gif_frame(epoch, n_intervals, run_folder, interval_disabled, gif_total_frames):
     ctx = dash.callback_context
     triggered = ctx.triggered_id
+    gif_frames = load_gif_frames(run_folder)
+    if gif_total_frames is None:
+        gif_total_frames = len(gif_frames)
     if not interval_disabled and triggered == 'gif-interval':
         next_epoch = (epoch + 1) % gif_total_frames
     else:
-        next_epoch = epoch
+        next_epoch = epoch if epoch < gif_total_frames else 0
     frame_src = pil_image_to_base64(gif_frames[next_epoch])
     return frame_src, next_epoch
 
 # ---- CALLBACK: UPDATE PLOTLY GRAPHS (ONLY WHEN PAUSED OR INITIAL) ----
 @app.callback(
     Output('surface-graph', 'figure'),
+    Input('gif-slider', 'value'),
+    Input('run-selector', 'value'),
+    Input('play-pause-btn', 'n_clicks'),
+    State('gif-interval', 'disabled'),
+    prevent_initial_call=False,
+    allow_duplicate=True
+)
+def update_surface_graph(slider_value, run_folder, n_clicks, interval_disabled):
+    # Update when animation is paused or play/pause button is clicked
+    ctx = dash.callback_context
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    if interval_disabled or triggered_id == 'play-pause-btn':
+        return make_surface_fig(slider_value, run_folder)
+    else:
+        return dash.no_update
+
+# ---- SLOW CALLBACK: UPDATE ALL OTHER GRAPHS ----
+@app.callback(
     Output('gradient-angle-plot', 'figure'),
     Output('pca-overlay-plot', 'figure'),
     Output('trajectory-overlay-plot', 'figure'),
@@ -2791,45 +2865,50 @@ def update_gif_frame(epoch, n_intervals, interval_disabled):
     Output('metadata', 'children'),
     Input('gif-slider', 'value'),
     Input('play-pause-btn', 'n_clicks'),
+    Input('run-selector', 'value'),
     State('gif-interval', 'disabled'),
-    prevent_initial_call=False
+    prevent_initial_call=False,
+    allow_duplicate=True
 )
-def update_plotly_graphs(slider_value, button_clicks, interval_disabled):
+def update_plotly_graphs(slider_value, button_clicks, run_folder, interval_disabled):
+    ctx = dash.callback_context
     ctx = dash.callback_context
     
-    # Only update the plots if:
-    # 1. This is the initial load (no trigger)
-    # 2. User clicked play/pause button and now it's paused
-    # 3. Animation is paused and slider changed (manual interaction)
+    # Update plots if:
+    # 1. Initial load (no trigger)
+    # 2. Animation is paused (interval_disabled)
     if not ctx.triggered:
-        # Initial load
         epoch_to_plot = 0
-    elif ctx.triggered_id == 'play-pause-btn' and interval_disabled:
-        # User just paused (button was clicked and interval is now disabled)
-        epoch_to_plot = slider_value
-    elif ctx.triggered_id == 'gif-slider' and interval_disabled:
-        # Slider changed while paused (manual interaction)
+    elif interval_disabled:
         epoch_to_plot = slider_value
     else:
         # Animation is running, don't update plots (too laggy)
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        )
     
-    surface_fig = make_surface_fig(epoch_to_plot)
-    gradient_fig = make_gradient_angle_fig(epoch_to_plot)
-    pca_fig = make_pca_overlay_fig(epoch_to_plot)
-    trajectory_fig = make_trajectory_overlay_fig(epoch_to_plot)
-    eigenvalues_fig = make_eigenvalues_plot(epoch_to_plot)
-    eigenvectors_fig = make_eigenvectors_plot(epoch_to_plot)
-    hessian_fig = make_hessian_heatmap(epoch_to_plot)
-    curvature_fig = make_curvature_heatmap(epoch_to_plot)
-    persistence_fig = make_persistence_diagram(epoch_to_plot)
-    critical_points_fig = make_critical_points_evolution(epoch_to_plot)
-    topology_timeline_fig = make_topology_timeline(epoch_to_plot)
-    complexity_fig = make_complexity_metrics_plot(epoch_to_plot)
-    critical_classification_fig = make_critical_points_plot(epoch_to_plot)
-    sharpness_fig = make_sharpness_metrics_plot(epoch_to_plot)
-    meta_text = f"Epoch: {epoch_to_plot}"
-    return surface_fig, gradient_fig, pca_fig, trajectory_fig, eigenvalues_fig, eigenvectors_fig, hessian_fig, curvature_fig, persistence_fig, critical_points_fig, topology_timeline_fig, complexity_fig, critical_classification_fig, sharpness_fig, meta_text
+    gif_frames = load_gif_frames(run_folder)
+    total_epochs = len(gif_frames)
+    gradient_fig = make_gradient_angle_fig(epoch_to_plot, total_epochs)
+    pca_fig = make_pca_overlay_fig(epoch_to_plot, run_folder)
+    trajectory_fig = make_trajectory_overlay_fig(epoch_to_plot, run_folder) if 'run_folder' in make_trajectory_overlay_fig.__code__.co_varnames else make_trajectory_overlay_fig(epoch_to_plot)
+    eigenvalues_fig = make_eigenvalues_plot(epoch_to_plot, total_epochs)
+    eigenvectors_fig = make_eigenvectors_plot(epoch_to_plot, run_folder) if 'run_folder' in make_eigenvectors_plot.__code__.co_varnames else make_eigenvectors_plot(epoch_to_plot)
+    hessian_fig = make_hessian_heatmap(epoch_to_plot, run_folder) if 'run_folder' in make_hessian_heatmap.__code__.co_varnames else make_hessian_heatmap(epoch_to_plot)
+    curvature_fig = make_curvature_heatmap(epoch_to_plot, run_folder) if 'run_folder' in make_curvature_heatmap.__code__.co_varnames else make_curvature_heatmap(epoch_to_plot)
+    persistence_fig = make_persistence_diagram(epoch_to_plot, run_folder) if 'run_folder' in make_persistence_diagram.__code__.co_varnames else make_persistence_diagram(epoch_to_plot)
+    critical_points_fig = make_critical_points_evolution(epoch_to_plot, total_epochs)
+    topology_timeline_fig = make_topology_timeline(epoch_to_plot, run_folder) if 'run_folder' in make_topology_timeline.__code__.co_varnames else make_topology_timeline(epoch_to_plot)
+    complexity_fig = make_complexity_metrics_plot(epoch_to_plot, total_epochs)
+    critical_classification_fig = make_critical_points_plot(epoch_to_plot, total_epochs)
+    sharpness_fig = make_complexity_metrics_plot(epoch_to_plot, total_epochs)
+    meta_text = f"Epoch: {epoch_to_plot} | Run: {run_folder}"
+    return (
+        gradient_fig, pca_fig, trajectory_fig, eigenvalues_fig, eigenvectors_fig, hessian_fig, curvature_fig,
+        persistence_fig, critical_points_fig, topology_timeline_fig, complexity_fig, critical_classification_fig,
+        sharpness_fig, meta_text
+    )
 
 # ---- CALLBACK: UPDATE AVERAGE GRADIENT ANGLE PLOT (STATIC) ----
 @app.callback(
@@ -2839,7 +2918,9 @@ def update_plotly_graphs(slider_value, button_clicks, interval_disabled):
 )
 def update_avg_gradient_plot(n_clicks):
     # This plot doesn't change, so just return the static figure
-    return make_avg_gradient_angle_fig()
+    gif_frames = load_gif_frames(DEFAULT_RUN)
+    total_epochs = len(gif_frames)
+    return make_avg_gradient_angle_fig(total_epochs)
 
 # ---- CALLBACK: UPDATE AGGREGATED ANALYSIS PLOTS (STATIC) ----
 @app.callback(
@@ -2851,13 +2932,37 @@ def update_avg_gradient_plot(n_clicks):
 )
 def update_aggregated_plots(n_clicks):
     # These plots don't change with epochs, so generate them once
-    avg_landscape_fig = make_avg_loss_landscape()
-    avg_curvature_fig = make_avg_curvature_distribution()
-    eigenvalue_summary_fig = make_eigenvalue_evolution_summary()
-    
+    gif_frames = load_gif_frames(DEFAULT_RUN)
+    total_epochs = len(gif_frames)
+    avg_landscape_fig = make_avg_loss_landscape(total_epochs)
+    avg_curvature_fig = make_avg_curvature_distribution(total_epochs)
+    eigenvalue_summary_fig = make_eigenvalue_evolution_summary(total_epochs)
     return avg_landscape_fig, avg_curvature_fig, eigenvalue_summary_fig
 
 # ---- CALLBACK: UPDATE ADVANCED ANALYSIS EVOLUTION PLOTS (STATIC) ----
+@app.callback(
+    Output('dynamic-title', 'children'),
+    Input('run-selector', 'value'),
+)
+def update_dynamic_title(run_folder):
+    # Example run_folder: '50_-1,1,101 (2,8,2 PCA)'
+    # Parse architecture, method, and dimensions
+    import re
+    arch_match = re.search(r'\((.*?)\)', run_folder)
+    arch = arch_match.group(1) if arch_match else ''
+    method = 'PCA' if 'PCA' in run_folder.upper() else ('Random' if 'RANDOM' in run_folder.upper() else '')
+    dims_match = re.match(r'(\d+)_\[(-?\d+),(-?\d+),(\d+)\s*\((.*?)\)', run_folder)
+    dims = ''
+    if dims_match:
+        dims = f"[-1, 1, 101]"
+    else:
+        # fallback: try to extract from run_folder
+        dims = re.search(r'(\[.*?\])', run_folder)
+        dims = dims.group(1) if dims else ''
+    # Example dataset extraction (customize as needed)
+    dataset = 'XOR'
+    title = f"{method}-based Loss Landscape Visualization | Architecture: {arch} | Dataset: {dataset}"
+    return title
 @app.callback(
     Output('complexity-evolution-plot', 'figure'),
     Output('critical-points-evolution-plot', 'figure'),
@@ -2867,10 +2972,11 @@ def update_aggregated_plots(n_clicks):
 )
 def update_advanced_evolution_plots(n_clicks):
     # These evolution plots show data across all epochs, so generate them once
-    complexity_evolution_fig = make_complexity_evolution_plot()
-    critical_points_evolution_fig = make_critical_points_evolution_plot()
-    sharpness_evolution_fig = make_sharpness_evolution_plot()
-    
+    gif_frames = load_gif_frames(DEFAULT_RUN)
+    total_epochs = len(gif_frames)
+    complexity_evolution_fig = make_complexity_evolution_plot(total_epochs)
+    critical_points_evolution_fig = make_critical_points_evolution_plot(total_epochs)
+    sharpness_evolution_fig = make_sharpness_evolution_plot(total_epochs)
     return complexity_evolution_fig, critical_points_evolution_fig, sharpness_evolution_fig
 
 if __name__ == '__main__':

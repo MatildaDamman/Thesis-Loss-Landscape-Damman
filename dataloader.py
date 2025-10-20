@@ -14,7 +14,7 @@ def get_relative_path(file):
 
 def load_dataset(dataset='cifar10', datapath='cifar10/data', batch_size=128, \
                  threads=2, raw_data=False, data_split=1, split_idx=0, \
-                 trainloader_path="", testloader_path=""):
+                 trainloader_path="", testloader_path="", model_type=""):
     """
     Setup dataloader. The data is not randomly cropped as in training because of
     we want to esimate the loss value with a fixed dataset.
@@ -43,6 +43,14 @@ def load_dataset(dataset='cifar10', datapath='cifar10/data', batch_size=128, \
         df = pd.read_csv(datapath)
         X = df.iloc[:, :-1].values.astype('float32')
         y = df.iloc[:, -1].values.astype('int64')
+        
+        # Add interaction feature for 3,3,2 architecture
+        if model_type == 'xor_332':
+            import numpy as np
+            interaction_feature = (X[:, 0] * X[:, 1]).reshape(-1, 1)
+            X = np.concatenate([X, interaction_feature], axis=1)
+            print(f"🔧 Extended XOR data to 3D for {model_type}: {X.shape}")
+        
         tensor_x = torch.tensor(X)
         tensor_y = torch.tensor(y)
         xor_dataset = TensorDataset(tensor_x, tensor_y)
