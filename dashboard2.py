@@ -2393,30 +2393,34 @@ app.layout = html.Div([
             
             # Visualization Section
             html.Div(className="visualization-container", style={
-                'display': 'flex', 
-                'gap': '2rem', 
+                'display': 'flex',
+                'gap': '2rem',
                 'margin-top': '2rem',
                 'background': UQ_WHITE,
                 'padding': '2rem',
                 'border-radius': '8px',
-                'box-shadow': '0 2px 8px rgba(0,0,0,0.1)'
+                'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
+                'height': '600px',  # Fixed height for the white panel only
+                'align-items': 'flex-start',
+                'margin-bottom': '5rem'  # Drop the white border further down the page
             }, children=[
                 # Animation Panel
                 html.Section(id="animation-section", style={'flex': '1'}, children=[
                     html.H3("Loss Landscape Animation", style={'margin-top': '0'}),
                     html.Div([
                         html.Img(id='gif-display', style={
-                            'width': '120%', 
-                            'height': '120%', 
-                            'object-fit': 'contain', 
-                            'border-radius': '8px', 
+                            'width': '100%',
+                            'height': '100%',
+                            'object-fit': 'contain',
+                            'border-radius': '8px',
                             'border': f'2px solid {UQ_LIGHT_GREY}'
                         }),
                     ], style={
-                        'height': '500px', 
-                        'display': 'flex', 
-                        'align-items': 'center', 
-                        'justify-content': 'center', 
+                        'height': '100%',
+                        'min-height': '400px',  # Match the Interactive 3D Surface panel height
+                        'display': 'flex',
+                        'align-items': 'center',
+                        'justify-content': 'center',
                         'overflow': 'hidden',
                         'background': UQ_BACKGROUND,
                         'border-radius': '8px'
@@ -2427,8 +2431,10 @@ app.layout = html.Div([
                 html.Section(id="interactive-section", style={'flex': '1'}, children=[
                     html.H3("Interactive 3D Surface", style={'margin-top': '0'}),
                     html.Div([
-                        dcc.Graph(id='surface-graph', style={'height': '500px', 'width': '100%'}),
+                        dcc.Graph(id='surface-graph', style={'height': '100%', 'width': '100%'}),
                     ], style={
+                        'height': '100%',
+                        'min-height': '575px',  # Make the Interactive 3D Panel longer at the bottom
                         'border-radius': '8px',
                         'background': UQ_WHITE,
                         'border': f'2px solid {UQ_LIGHT_GREY}'
