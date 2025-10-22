@@ -19,13 +19,15 @@ def load_gif_frames(run_folder):
     gif_path = get_gif_path(run_folder)
     img = Image.open(gif_path)
     frames = [f.copy().convert('RGBA') for f in ImageSequence.Iterator(img)]
-    buf_list = []
+    base64_list = []
     for frame in frames:
         buf = io.BytesIO()
         frame.save(buf, format='PNG')
-        buf_list.append(buf.getvalue())
-    _gif_frame_cache[run_folder] = buf_list
-    return buf_list
+        img_bytes = buf.getvalue()
+        base64_str = 'data:image/png;base64,' + base64.b64encode(img_bytes).decode('ascii')
+        base64_list.append(base64_str)
+    _gif_frame_cache[run_folder] = base64_list
+    return base64_list
 
 # ---- CONFIGURATION ----
 EPOCHS = 50
@@ -103,21 +105,46 @@ def make_surface_fig(epoch, run_folder=DEFAULT_RUN):
     )
     return fig
 
-def make_gradient_angle_fig(current_epoch, total_epochs):
-    """Generate gradient vector angle plot over training steps"""
-    # Generate sample gradient angle data (replace with real gradient data if available)
-    epochs = list(range(min(total_epochs, 50)))  # Limit to available epochs
-    
-    # Simulate gradient vector angles (replace with actual gradient calculations)
-    np.random.seed(42)  # For reproducible demo data
-    base_angles = np.linspace(0, 2*np.pi, len(epochs))
-    noise = np.random.normal(0, 0.3, len(epochs))
-    gradient_angles = base_angles + noise
-    
-    # Create the plot
+def make_gradient_angle_fig(current_epoch, total_epochs, run_folder):
+    """Generate gradient vector angle plot over training steps, with average line and value."""
+    import numpy as np
+    import os
+    import h5py
+    import h5_util
+    epochs = list(range(min(total_epochs, 50)))
+    gradient_angles = []
+    # Always use the main PCA direction file, not epoch-specific ones
+    pca_dir_file = os.path.join(run_folder, 'pca_gradient_directions.h5')
+    try:
+        with h5py.File(pca_dir_file, 'r') as f:
+            # Robustly flatten and concatenate all arrays in 'xdirection' and 'ydirection' using actual keys
+            xdirection_flat = np.concatenate([np.array(f['xdirection'][k]).flatten() for k in f['xdirection'].keys()])
+            ydirection_flat = np.concatenate([np.array(f['ydirection'][k]).flatten() for k in f['ydirection'].keys()])
+    except FileNotFoundError:
+        # If PCA file is missing, fill with zeros and skip projection
+        xdirection_flat = np.zeros(1)
+        ydirection_flat = np.zeros(1)
+    for epoch in epochs:
+        grad_path = os.path.join(run_folder, 'gradients', f'gradients_epoch_{epoch}.npy')
+        if os.path.exists(grad_path):
+            grad = np.load(grad_path)
+            if grad.ndim == 2:
+                mean_grad = np.mean(grad, axis=0)
+            else:
+                mean_grad = grad
+            # Only project if PCA directions are valid
+            if xdirection_flat.shape[0] > 1 and ydirection_flat.shape[0] > 1:
+                proj_x = np.dot(mean_grad, xdirection_flat)
+                proj_y = np.dot(mean_grad, ydirection_flat)
+                angle = np.arctan2(proj_y, proj_x)
+            else:
+                angle = 0.0
+            gradient_angles.append(angle)
+        else:
+            gradient_angles.append(0.0)
+    avg_angle = np.mean(gradient_angles)
+
     fig = go.Figure()
-    
-    # Add the gradient angle line
     fig.add_trace(go.Scatter(
         x=epochs,
         y=gradient_angles,
@@ -126,8 +153,13 @@ def make_gradient_angle_fig(current_epoch, total_epochs):
         line=dict(color=UQ_PURPLE, width=2),
         marker=dict(color=UQ_PURPLE, size=4)
     ))
-    
-    # Highlight current epoch
+    fig.add_trace(go.Scatter(
+        x=epochs,
+        y=[avg_angle]*len(epochs),
+        mode='lines',
+        name=f'Average Angle ({avg_angle:.2f} rad)',
+        line=dict(color='orange', width=2, dash='dash')
+    ))
     if current_epoch < len(epochs):
         fig.add_trace(go.Scatter(
             x=[current_epoch],
@@ -136,10 +168,9 @@ def make_gradient_angle_fig(current_epoch, total_epochs):
             name='Current Epoch',
             marker=dict(color=UQ_GOLD, size=12, symbol='star')
         ))
-    
     fig.update_layout(
         title=dict(
-            text=f'Gradient Vector Angle Evolution (Current: Epoch {current_epoch})',
+            text=f'Gradient Vector Angle Evolution (Current: Epoch {current_epoch})<br>Average Angle: {avg_angle:.2f} radians',
             font=dict(color=UQ_PURPLE, size=14, family="Montserrat"),
             x=0.5
         ),
@@ -153,7 +184,7 @@ def make_gradient_angle_fig(current_epoch, total_epochs):
             titlefont=dict(color=UQ_PURPLE),
             gridcolor=UQ_LIGHT_GREY
         ),
-        margin=dict(l=60, r=20, b=60, t=60),
+        margin=dict(l=60, r=20, b=60, t=80),
         paper_bgcolor=UQ_WHITE,
         plot_bgcolor=UQ_WHITE,
         font=dict(family="Montserrat", color=UQ_PURPLE),
@@ -164,27 +195,53 @@ def make_gradient_angle_fig(current_epoch, total_epochs):
             borderwidth=1
         )
     )
-    
     return fig
 
 def make_avg_gradient_angle_fig(total_epochs):
     """Generate static average gradient angle plot over all epochs"""
-    # Generate sample gradient angle data (replace with real gradient data if available)
-    epochs = list(range(min(total_epochs, 50)))  # Limit to available epochs
-    
-    # Simulate gradient vector angles (replace with actual gradient calculations)
-    np.random.seed(42)  # For reproducible demo data
-    base_angles = np.linspace(0, 2*np.pi, len(epochs))
-    noise = np.random.normal(0, 0.3, len(epochs))
-    gradient_angles = base_angles + noise
-    
-    # Calculate average gradient angle
+    # Use real gradient data from the selected dataset
+    import os
+    import numpy as np
+    import h5py
+    epochs = list(range(min(total_epochs, 50)))
+    gradient_angles = []
+    # Try to load PCA directions if available
+    run_folder = None
+    import inspect
+    frame = inspect.currentframe()
+    try:
+        run_folder = frame.f_back.f_locals.get('run_folder', None)
+    finally:
+        del frame
+    if run_folder is None:
+        run_folder = list(RUN_FOLDERS.values())[0] if RUN_FOLDERS else '.'
+    pca_dir_file = os.path.join(run_folder, 'pca_gradient_directions.h5')
+    try:
+        with h5py.File(pca_dir_file, 'r') as f:
+            xdirection_flat = np.concatenate([np.array(f['xdirection'][k]).flatten() for k in f['xdirection'].keys()])
+            ydirection_flat = np.concatenate([np.array(f['ydirection'][k]).flatten() for k in f['ydirection'].keys()])
+    except Exception:
+        xdirection_flat = np.zeros(1)
+        ydirection_flat = np.zeros(1)
+    for epoch in epochs:
+        grad_path = os.path.join(run_folder, 'gradients', f'gradients_epoch_{epoch}.npy')
+        if os.path.exists(grad_path):
+            grad = np.load(grad_path)
+            if grad.ndim == 2:
+                mean_grad = np.mean(grad, axis=0)
+            else:
+                mean_grad = grad
+            if xdirection_flat.shape[0] > 1 and ydirection_flat.shape[0] > 1:
+                proj_x = np.dot(mean_grad, xdirection_flat)
+                proj_y = np.dot(mean_grad, ydirection_flat)
+                angle = np.arctan2(proj_y, proj_x)
+            else:
+                angle = 0.0
+            gradient_angles.append(angle)
+        else:
+            gradient_angles.append(0.0)
     avg_angle = np.mean(gradient_angles)
-    
-    # Create the plot
     fig = go.Figure()
-    
-    # Add the average line
     fig.add_trace(go.Scatter(
         x=[epochs[0], epochs[-1]],
         y=[avg_angle, avg_angle],
@@ -192,8 +249,6 @@ def make_avg_gradient_angle_fig(total_epochs):
         name=f'Average Gradient Angle',
         line=dict(color=UQ_GOLD, width=4, dash='dash'),
     ))
-    
-    # Add scatter points for individual epochs
     fig.add_trace(go.Scatter(
         x=epochs,
         y=gradient_angles,
@@ -201,7 +256,6 @@ def make_avg_gradient_angle_fig(total_epochs):
         name='Individual Epochs',
         marker=dict(color=UQ_PURPLE, size=6, opacity=0.6)
     ))
-    
     fig.update_layout(
         title=dict(
             text=f'Average Gradient Vector Angle: {avg_angle:.3f} radians',
@@ -1860,43 +1914,36 @@ def make_complexity_metrics_plot(current_epoch, total_epochs):
     
     fig = go.Figure()
     
-    # Plot different sharpness metrics
-    metrics = ['sharpness', 'sam_measure', 'spectral_norm']
-    colors = ['red', 'blue', 'purple']
-    names = ['Local Sharpness', 'SAM Measure', 'Spectral Norm']
-    
-    for metric, color, name in zip(metrics, colors, names):
-        values = [s[metric] for s in sharpness_data]
-        # Normalize for visualization
-        if max(values) > 0:
-            normalized_values = np.array(values) / max(values)
-        else:
-            normalized_values = values
-            
-        fig.add_trace(go.Scatter(
-            x=epochs,
-            y=normalized_values,
-            mode='lines+markers',
-            name=name,
-            line=dict(color=color, width=2),
-            marker=dict(color=color, size=4)
-        ))
+    # Plot only Local Sharpness metric
+    metric = 'sharpness'
+    color = 'red'
+    name = 'Local Sharpness'
+    values = [s[metric] for s in sharpness_data]
+    # Normalize for visualization
+    if max(values) > 0:
+        normalized_values = np.array(values) / max(values)
+    else:
+        normalized_values = values
+    fig.add_trace(go.Scatter(
+        x=epochs,
+        y=normalized_values,
+        mode='lines+markers',
+        name=name,
+        line=dict(color=color, width=2),
+        marker=dict(color=color, size=4)
+    ))
     
     # Current epoch sharpness
     current_sharpness = compute_sharpness_metrics(z)
     
     # Highlight current epoch
     if current_epoch < len(sharpness_data):
-        current_values = []
-        for metric in metrics:
-            val = sharpness_data[current_epoch][metric]
-            max_val = max([s[metric] for s in sharpness_data])
-            normalized_val = val / max_val if max_val > 0 else 0
-            current_values.append(normalized_val)
-        
+        val = sharpness_data[current_epoch][metric]
+        max_val = max([s[metric] for s in sharpness_data])
+        normalized_val = val / max_val if max_val > 0 else 0
         fig.add_trace(go.Scatter(
-            x=[current_epoch] * len(current_values),
-            y=current_values,
+            x=[current_epoch],
+            y=[normalized_val],
             mode='markers',
             name='Current Epoch',
             marker=dict(color=UQ_GOLD, size=10, symbol='star')
@@ -1932,13 +1979,13 @@ def make_complexity_metrics_plot(current_epoch, total_epochs):
     
     return fig
 
-def make_complexity_evolution_plot(total_epochs):
+def make_complexity_evolution_plot(total_epochs, run_folder=None):
     """Generate comprehensive complexity evolution across all epochs"""
     epochs = list(range(min(total_epochs, 50)))
     complexities = []
     
     for epoch in epochs:
-        x_e, y_e, z_e = load_surface(epoch)
+        x_e, y_e, z_e = load_surface(epoch, run_folder=run_folder)
         if z_e is not None:
             comp = landscape_complexity_metrics(z_e)
             complexities.append(comp)
@@ -2023,39 +2070,29 @@ def make_complexity_evolution_plot(total_epochs):
     
     return fig
 
-def make_critical_points_evolution_plot(total_epochs):
+def make_critical_points_evolution_plot(total_epochs, run_folder=None):
     """Generate comprehensive critical points evolution across all epochs"""
     epochs = list(range(min(total_epochs, 50)))
-    
-    np.random.seed(999)
-    
     critical_points_data = []
     for epoch in epochs:
-        # Simulate Hessian eigenvalues at multiple points
-        n_points = 25
-        all_classifications = []
-        
-        for i in range(n_points):
-            # Generate more realistic eigenvalue evolution
-            base_eigenvals = np.random.normal(-0.5, 0.3, 5)
-            # Add epoch-dependent trends
-            evolution_factor = 1 - 0.02 * epoch  # Gradual change
-            eigenvals = base_eigenvals * evolution_factor
-            
-            # Add some noise and occasional positive eigenvalues
-            if np.random.rand() < 0.1:  # 10% chance of positive eigenvalues
-                eigenvals[np.random.randint(0, len(eigenvals))] = abs(eigenvals[np.random.randint(0, len(eigenvals))])
-            
-            classification = classify_critical_points(eigenvals)
-            all_classifications.append(classification)
-        
-        # Aggregate statistics
-        minima = sum(1 for c in all_classifications if c['type'] == 'minimum')
-        maxima = sum(1 for c in all_classifications if c['type'] == 'maximum')
-        saddles = sum(1 for c in all_classifications if 'saddle' in c['type'])
-        avg_morse_index = np.mean([c['morse_index'] for c in all_classifications])
-        avg_condition_number = np.mean([c['condition_number'] for c in all_classifications if not np.isinf(c['condition_number'])])
-        
+        x_e, y_e, z_e = load_surface(epoch, run_folder)
+        if z_e is not None:
+            # Compute critical points from the surface z_e
+            # For demonstration, use a simple method: count local minima, maxima, and saddle points
+            # This is a placeholder; replace with your scientific method if needed
+            from scipy.ndimage import gaussian_filter, laplace
+            import numpy as np
+            z_smooth = gaussian_filter(z_e, sigma=1)
+            lap = laplace(z_smooth)
+            minima = np.sum((lap > 0))
+            maxima = np.sum((lap < 0))
+            saddles = np.sum(np.isclose(lap, 0, atol=1e-2))
+            avg_morse_index = np.mean(lap)
+            avg_condition_number = np.std(z_smooth)
+        else:
+            minima = maxima = saddles = 0
+            avg_morse_index = 0
+            avg_condition_number = 0
         critical_points_data.append({
             'epoch': epoch,
             'minima': minima,
@@ -2161,22 +2198,20 @@ def make_critical_points_evolution_plot(total_epochs):
     
     return fig
 
-def make_sharpness_evolution_plot(total_epochs):
-    """Generate comprehensive sharpness evolution across all epochs"""
+def make_sharpness_evolution_plot(total_epochs, current_epoch=None, run_folder=None):
+    """Generate comprehensive sharpness evolution across all epochs, with optional tracker for current epoch"""
     epochs = list(range(min(total_epochs, 50)))
     sharpness_data = []
-    
     for epoch in epochs:
-        x_e, y_e, z_e = load_surface(epoch)
+        x_e, y_e, z_e = load_surface(epoch, run_folder)
         if z_e is not None:
             sharpness = compute_sharpness_metrics(z_e)
             sharpness_data.append(sharpness)
         else:
             sharpness_data.append({'sharpness': 0, 'sam_measure': 0, 'max_eigenval': 0, 'spectral_norm': 0})
-    
     fig = go.Figure()
     
-    # Main sharpness metrics
+    # Main sharpness metric only
     fig.add_trace(go.Scatter(
         x=epochs,
         y=[s['sharpness'] for s in sharpness_data],
@@ -2187,50 +2222,22 @@ def make_sharpness_evolution_plot(total_epochs):
         fill='tozeroy'
     ))
     
-    # SAM measure (normalized)
-    sam_values = [s['sam_measure'] for s in sharpness_data]
-    if max(sam_values) > 0:
-        sam_normalized = np.array(sam_values) / max(sam_values) * max([s['sharpness'] for s in sharpness_data])
-    else:
-        sam_normalized = sam_values
-    
-    fig.add_trace(go.Scatter(
-        x=epochs,
-        y=sam_normalized,
-        mode='lines+markers',
-        name='SAM Measure (scaled)',
-        line=dict(color='blue', width=2),
-        marker=dict(color='blue', size=4)
-    ))
-    
-    # Spectral norm on secondary axis
-    fig.add_trace(go.Scatter(
-        x=epochs,
-        y=[s['spectral_norm'] for s in sharpness_data],
-        mode='lines+markers',
-        name='Spectral Norm',
-        line=dict(color='purple', width=2, dash='dash'),
-        marker=dict(color='purple', size=4),
-        yaxis='y2'
-    ))
-    
-    # Max eigenvalue approximation
-    fig.add_trace(go.Scatter(
-        x=epochs,
-        y=[s['max_eigenval'] for s in sharpness_data],
-        mode='lines',
-        name='Max Eigenvalue Approx',
-        line=dict(color='green', width=2, dash='dot'),
-        yaxis='y2'
-    ))
-    
+    # Add tracker (yellow star) at current epoch
+    if current_epoch is not None and 0 <= current_epoch < len(epochs):
+        s = sharpness_data[current_epoch]
+        fig.add_trace(go.Scatter(
+            x=[current_epoch],
+            y=[s['sharpness']],
+            mode='markers',
+            name='Current Epoch',
+            marker=dict(symbol='star', color='gold', size=18, line=dict(color='orange', width=2)),
+            showlegend=True
+        ))
     # Add trend analysis
     if len(epochs) > 10:
-        # Fit polynomial trend to sharpness
         sharpness_values = [s['sharpness'] for s in sharpness_data]
         trend_coeffs = np.polyfit(epochs, sharpness_values, 2)
         trend_line = np.polyval(trend_coeffs, epochs)
-        
         fig.add_trace(go.Scatter(
             x=epochs,
             y=trend_line,
@@ -2274,7 +2281,6 @@ def make_sharpness_evolution_plot(total_epochs):
         ),
         annotations=[
             dict(
-                text="Lower values indicate flatter loss landscape",
                 x=0.5, y=0.02,
                 xref='paper', yref='paper',
                 showarrow=False,
@@ -2430,23 +2436,21 @@ app.layout = html.Div([
                 ]),
             ]),
             
+            # Average Loss Landscape (moved above gradient angle plots)
+            html.Div([
+                html.H4("Average Loss Landscape", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
+                dcc.Graph(id='avg-loss-landscape', style={'height': '400px', 'width': '100%'}),
+            ], style={
+                'background': UQ_WHITE,
+                'padding': '1rem',
+                'border-radius': '8px',
+                'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
+                'border': f'2px solid {UQ_LIGHT_GREY}',
+                'margin-bottom': '1.5rem'
+            }),
             # Gradient Vector Analysis Section
             html.Section(id="gradient-section", children=[
                 html.H3("Gradient Vector Analysis"),
-                
-                # Average Gradient Angle (Static)
-                html.Div([
-                    dcc.Graph(id='avg-gradient-angle-plot', style={'height': '300px', 'width': '100%'}),
-                ], style={
-                    'background': UQ_WHITE,
-                    'padding': '1rem',
-                    'border-radius': '8px',
-                    'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                    'border': f'2px solid {UQ_LIGHT_GREY}',
-                    'margin-bottom': '1rem'
-                }),
-                
-                # Gradient Angle Evolution (Dynamic)
                 html.Div([
                     dcc.Graph(id='gradient-angle-plot', style={'height': '300px', 'width': '100%'}),
                 ], style={
@@ -2468,62 +2472,44 @@ app.layout = html.Div([
                     'gap': '1rem', 
                     'margin-bottom': '1rem'
                 }, children=[
-                    # Average Loss Landscape
-                    html.Div(style={'flex': '1'}, children=[
-                        html.H4("Average Loss Landscape", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                        html.Div([
-                            dcc.Graph(id='avg-loss-landscape', style={'height': '400px', 'width': '100%'}),
-                        ], style={
-                            'background': UQ_WHITE,
-                            'padding': '1rem',
-                            'border-radius': '8px',
-                            'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                            'border': f'2px solid {UQ_LIGHT_GREY}'
-                        }),
-                    ]),
+                    # Average Loss Landscape (removed, now above)
                     
                     # Average Curvature Distribution
-                    html.Div(style={'flex': '1'}, children=[
-                        html.H4("Average Curvature Distribution", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                        html.Div([
-                            dcc.Graph(id='avg-curvature-dist', style={'height': '400px', 'width': '100%'}),
-                        ], style={
-                            'background': UQ_WHITE,
-                            'padding': '1rem',
-                            'border-radius': '8px',
-                            'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                            'border': f'2px solid {UQ_LIGHT_GREY}'
-                        }),
-                    ]),
+                    # ...existing code...
                 ]),
                 
-                # Single wide plot for eigenvalue evolution summary
+                # ...existing code...
+
+               
                 html.Div([
-                    html.H4("Eigenvalue Evolution Summary", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                    dcc.Graph(id='eigenvalue-evolution-summary', style={'height': '350px', 'width': '100%'}),
+                    html.H4("Hessian Eigenvalues Time Series", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
+                    dcc.Graph(id='eigenvalues-plot', style={'height': '350px', 'width': '100%'}),
                 ], style={
                     'background': UQ_WHITE,
                     'padding': '1rem',
                     'border-radius': '8px',
                     'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                    'border': f'2px solid {UQ_LIGHT_GREY}'
+                    'border': f'2px solid {UQ_LIGHT_GREY}',
+                    'margin-bottom': '1rem'
                 }),
+
+            
             ]),
             
-            # Principal Direction (PCA) Overlay Section
-            html.Section(id="pca-section", children=[
-                html.H3("Principal Direction (PCA) Overlay"),
-                html.Div([
-                    dcc.Graph(id='pca-overlay-plot', style={'height': '400px', 'width': '100%'}),
-                ], style={
-                    'background': UQ_WHITE,
-                    'padding': '1rem',
-                    'border-radius': '8px',
-                    'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                    'border': f'2px solid {UQ_LIGHT_GREY}'
-                }),
-            ]),
-            
+            # Sharpness Evolution Across All Epochs (bottom graph, always present)
+            html.Div([
+                html.H5("Sharpness Evolution Across All Epochs", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '0.5rem'}),
+                dcc.Graph(id='sharpness-evolution-plot', style={'height': '350px', 'width': '100%'}),
+            ], style={
+                'background': UQ_WHITE,
+                'padding': '1rem',
+                'border-radius': '8px',
+                'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
+                'border': f'2px solid {UQ_LIGHT_GREY}',
+                'margin-bottom': '1.5rem'
+            }),
+
+
             # Optimizer Trajectory Overlay Section
             html.Section(id="trajectory-section", children=[
                 html.H3("Optimizer Trajectory Overlay"),
@@ -2538,33 +2524,6 @@ app.layout = html.Div([
                 }),
             ]),
             
-            # Eigenvalues/Eigenvectors Display Section
-            html.Section(id="eigenvalues-section", children=[
-                html.H3("Hessian Eigenvalues & Eigenvectors Analysis"),
-                
-                # Eigenvalues Time Series
-                html.Div([
-                    dcc.Graph(id='eigenvalues-plot', style={'height': '350px', 'width': '100%'}),
-                ], style={
-                    'background': UQ_WHITE,
-                    'padding': '1rem',
-                    'border-radius': '8px',
-                    'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                    'border': f'2px solid {UQ_LIGHT_GREY}',
-                    'margin-bottom': '1rem'
-                }),
-                
-                # Eigenvectors Overlay
-                html.Div([
-                    dcc.Graph(id='eigenvectors-plot', style={'height': '350px', 'width': '100%'}),
-                ], style={
-                    'background': UQ_WHITE,
-                    'padding': '1rem',
-                    'border-radius': '8px',
-                    'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                    'border': f'2px solid {UQ_LIGHT_GREY}'
-                }),
-            ]),
             
             # Hessian/Curvature Heatmaps Section
             html.Section(id="hessian-heatmaps-section", children=[
@@ -2590,165 +2549,28 @@ app.layout = html.Div([
                         }),
                     ]),
                     
-                    # Curvature Heatmap
-                    html.Div(style={'flex': '1'}, children=[
-                        html.H4("Curvature Analysis", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                        html.Div([
-                            dcc.Graph(id='curvature-heatmap', style={'height': '400px', 'width': '100%'}),
-                        ], style={
-                            'background': UQ_WHITE,
-                            'padding': '1rem',
-                            'border-radius': '8px',
-                            'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                            'border': f'2px solid {UQ_LIGHT_GREY}'
-                        }),
-                    ]),
                 ]),
-            ]),
-            
-            # Topological Features Evolution Section
-            html.Section(id="topology-evolution-section", children=[
-                html.H3("Topological Features & Critical Points Evolution"),
-                
-                # Two-column layout for topology analysis
-                html.Div(className="visualization-container", style={
-                    'display': 'flex', 
-                    'gap': '1rem', 
-                    'margin-top': '1rem'
-                }, children=[
-                    # Persistence Diagram
-                    html.Div(style={'flex': '1'}, children=[
-                        html.H4("Persistence Diagram", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                        html.Div([
-                            dcc.Graph(id='persistence-diagram', style={'height': '400px', 'width': '100%'}),
-                        ], style={
-                            'background': UQ_WHITE,
-                            'padding': '1rem',
-                            'border-radius': '8px',
-                            'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                            'border': f'2px solid {UQ_LIGHT_GREY}'
-                        }),
-                    ]),
-                    
-                    # Critical Points Evolution
-                    html.Div(style={'flex': '1'}, children=[
-                        html.H4("Critical Points Evolution", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                        html.Div([
-                            dcc.Graph(id='critical-points-evolution', style={'height': '400px', 'width': '100%'}),
-                        ], style={
-                            'background': UQ_WHITE,
-                            'padding': '1rem',
-                            'border-radius': '8px',
-                            'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                            'border': f'2px solid {UQ_LIGHT_GREY}'
-                        }),
-                    ]),
-                ]),
-                
-                # Topological Features Timeline
-                html.Div([
-                    html.H4("Topological Features Timeline", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                    dcc.Graph(id='topology-timeline', style={'height': '300px', 'width': '100%'}),
-                ], style={
-                    'background': UQ_WHITE,
-                    'padding': '1rem',
-                    'border-radius': '8px',
-                    'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                    'border': f'2px solid {UQ_LIGHT_GREY}',
-                    'margin-top': '1rem'
-                }),
             ]),
             
             # Advanced Landscape Analysis Section
             html.Section(id="advanced-analysis-section", children=[
-                html.H3("Advanced Landscape Analysis"),
-                
                 # Landscape Complexity Metrics - Vertical Stack
                 html.Div(className="visualization-container", style={'margin-top': '1rem'}, children=[
-                    html.H4("Complexity Metrics", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                    
-                    # Current epoch complexity
-                    html.Div([
-                        dcc.Graph(id='complexity-metrics-plot', style={'height': '400px', 'width': '100%'}),
-                    ], style={
-                        'background': UQ_WHITE,
-                        'padding': '1rem',
-                        'border-radius': '8px',
-                        'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                        'border': f'2px solid {UQ_LIGHT_GREY}',
-                        'margin-bottom': '1rem'
-                    }),
-                    
                     # Evolution across all epochs
                     html.Div([
-                        html.H5("Complexity Evolution Across All Epochs", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '0.5rem'}),
-                        dcc.Graph(id='complexity-evolution-plot', style={'height': '350px', 'width': '100%'}),
                     ], style={
                         'background': UQ_WHITE,
                         'padding': '1rem',
                         'border-radius': '8px',
                         'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
                         'border': f'2px solid {UQ_LIGHT_GREY}'
-                    }),
+                    })
                 ]),
-                
                 # Critical Points Classification - Vertical Stack
                 html.Div(className="visualization-container", style={'margin-top': '2rem'}, children=[
-                    html.H4("Critical Points Analysis", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                    
-                    # Current epoch critical points
-                    html.Div([
-                        dcc.Graph(id='critical-points-plot', style={'height': '400px', 'width': '100%'}),
-                    ], style={
-                        'background': UQ_WHITE,
-                        'padding': '1rem',
-                        'border-radius': '8px',
-                        'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                        'border': f'2px solid {UQ_LIGHT_GREY}',
-                        'margin-bottom': '1rem'
-                    }),
-                    
-                    # Evolution across all epochs
-                    html.Div([
-                        html.H5("Critical Points Evolution Across All Epochs", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '0.5rem'}),
-                        dcc.Graph(id='critical-points-evolution-plot', style={'height': '350px', 'width': '100%'}),
-                    ], style={
-                        'background': UQ_WHITE,
-                        'padding': '1rem',
-                        'border-radius': '8px',
-                        'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                        'border': f'2px solid {UQ_LIGHT_GREY}'
-                    }),
+                    # Empty block
                 ]),
-                
-                # Sharpness/Flatness Metrics - Vertical Stack
-                html.Div(className="visualization-container", style={'margin-top': '2rem'}, children=[
-                    html.H4("Sharpness Analysis", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '1rem'}),
-                    
-                    # Current epoch sharpness
-                    html.Div([
-                        dcc.Graph(id='sharpness-metrics-plot', style={'height': '400px', 'width': '100%'}),
-                    ], style={
-                        'background': UQ_WHITE,
-                        'padding': '1rem',
-                        'border-radius': '8px',
-                        'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                        'border': f'2px solid {UQ_LIGHT_GREY}',
-                        'margin-bottom': '1rem'
-                    }),
-                    
-                    # Evolution across all epochs
-                    html.Div([
-                        html.H5("Sharpness Evolution Across All Epochs", style={'color': UQ_PURPLE, 'text-align': 'center', 'margin-bottom': '0.5rem'}),
-                        dcc.Graph(id='sharpness-evolution-plot', style={'height': '350px', 'width': '100%'}),
-                    ], style={
-                        'background': UQ_WHITE,
-                        'padding': '1rem',
-                        'border-radius': '8px',
-                        'box-shadow': '0 2px 8px rgba(0,0,0,0.1)',
-                        'border': f'2px solid {UQ_LIGHT_GREY}'
-                    }),
-                ]),
+                # Sharpness/Flatness Metrics - Vertical Stack (moved above)
             ]),
 
             
@@ -2825,7 +2647,7 @@ def update_gif_frame(epoch, n_intervals, run_folder, interval_disabled, gif_tota
         next_epoch = (epoch + 1) % gif_total_frames
     else:
         next_epoch = epoch if epoch < gif_total_frames else 0
-    frame_src = pil_image_to_base64(gif_frames[next_epoch])
+    frame_src = gif_frames[next_epoch]
     return frame_src, next_epoch
 
 # ---- CALLBACK: UPDATE PLOTLY GRAPHS (ONLY WHEN PAUSED OR INITIAL) ----
@@ -2848,20 +2670,16 @@ def update_surface_graph(slider_value, run_folder, n_clicks, interval_disabled):
         return dash.no_update
 
 # ---- SLOW CALLBACK: UPDATE ALL OTHER GRAPHS ----
+
+# Updated callback: removed eigenvectors-plot Output and all related code
 @app.callback(
     Output('gradient-angle-plot', 'figure'),
-    Output('pca-overlay-plot', 'figure'),
     Output('trajectory-overlay-plot', 'figure'),
     Output('eigenvalues-plot', 'figure'),
-    Output('eigenvectors-plot', 'figure'),
     Output('hessian-heatmap', 'figure'),
-    Output('curvature-heatmap', 'figure'),
-    Output('persistence-diagram', 'figure'),
-    Output('critical-points-evolution', 'figure'),
-    Output('topology-timeline', 'figure'),
-    Output('complexity-metrics-plot', 'figure'),
-    Output('critical-points-plot', 'figure'),
-    Output('sharpness-metrics-plot', 'figure'),
+    # Removed topology-timeline from callback outputs
+    # Removed complexity-metrics-plot and critical-points-plot from callback outputs
+    # Removed sharpness-metrics-plot from callback outputs
     Output('metadata', 'children'),
     Input('gif-slider', 'value'),
     Input('play-pause-btn', 'n_clicks'),
@@ -2871,73 +2689,42 @@ def update_surface_graph(slider_value, run_folder, n_clicks, interval_disabled):
     allow_duplicate=True
 )
 def update_plotly_graphs(slider_value, button_clicks, run_folder, interval_disabled):
+    # Always recompute all outputs when any input changes
+    import dash
     ctx = dash.callback_context
-    ctx = dash.callback_context
-    
-    # Update plots if:
-    # 1. Initial load (no trigger)
-    # 2. Animation is paused (interval_disabled)
-    if not ctx.triggered:
-        epoch_to_plot = 0
-    elif interval_disabled:
-        epoch_to_plot = slider_value
-    else:
-        # Animation is running, don't update plots (too laggy)
-        return (
-            dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
-            dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-        )
-    
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    epoch_to_plot = slider_value if slider_value is not None else 0
     gif_frames = load_gif_frames(run_folder)
     total_epochs = len(gif_frames)
-    gradient_fig = make_gradient_angle_fig(epoch_to_plot, total_epochs)
-    pca_fig = make_pca_overlay_fig(epoch_to_plot, run_folder)
-    trajectory_fig = make_trajectory_overlay_fig(epoch_to_plot, run_folder) if 'run_folder' in make_trajectory_overlay_fig.__code__.co_varnames else make_trajectory_overlay_fig(epoch_to_plot)
+    gradient_fig = make_gradient_angle_fig(epoch_to_plot, total_epochs, run_folder)
+    if interval_disabled or triggered_id == 'play-pause-btn':
+        trajectory_fig = make_trajectory_overlay_fig(epoch_to_plot, run_folder) if 'run_folder' in make_trajectory_overlay_fig.__code__.co_varnames else make_trajectory_overlay_fig(epoch_to_plot)
+        hessian_fig = make_hessian_heatmap(epoch_to_plot, run_folder) if 'run_folder' in make_hessian_heatmap.__code__.co_varnames else make_hessian_heatmap(epoch_to_plot)
+    else:
+        trajectory_fig = dash.no_update
+        hessian_fig = dash.no_update
     eigenvalues_fig = make_eigenvalues_plot(epoch_to_plot, total_epochs)
-    eigenvectors_fig = make_eigenvectors_plot(epoch_to_plot, run_folder) if 'run_folder' in make_eigenvectors_plot.__code__.co_varnames else make_eigenvectors_plot(epoch_to_plot)
-    hessian_fig = make_hessian_heatmap(epoch_to_plot, run_folder) if 'run_folder' in make_hessian_heatmap.__code__.co_varnames else make_hessian_heatmap(epoch_to_plot)
-    curvature_fig = make_curvature_heatmap(epoch_to_plot, run_folder) if 'run_folder' in make_curvature_heatmap.__code__.co_varnames else make_curvature_heatmap(epoch_to_plot)
-    persistence_fig = make_persistence_diagram(epoch_to_plot, run_folder) if 'run_folder' in make_persistence_diagram.__code__.co_varnames else make_persistence_diagram(epoch_to_plot)
-    critical_points_fig = make_critical_points_evolution(epoch_to_plot, total_epochs)
-    topology_timeline_fig = make_topology_timeline(epoch_to_plot, run_folder) if 'run_folder' in make_topology_timeline.__code__.co_varnames else make_topology_timeline(epoch_to_plot)
-    complexity_fig = make_complexity_metrics_plot(epoch_to_plot, total_epochs)
-    critical_classification_fig = make_critical_points_plot(epoch_to_plot, total_epochs)
-    sharpness_fig = make_complexity_metrics_plot(epoch_to_plot, total_epochs)
     meta_text = f"Epoch: {epoch_to_plot} | Run: {run_folder}"
     return (
-        gradient_fig, pca_fig, trajectory_fig, eigenvalues_fig, eigenvectors_fig, hessian_fig, curvature_fig,
-        persistence_fig, critical_points_fig, topology_timeline_fig, complexity_fig, critical_classification_fig,
-        sharpness_fig, meta_text
+        gradient_fig, trajectory_fig, eigenvalues_fig, hessian_fig,
+        meta_text
     )
 
-# ---- CALLBACK: UPDATE AVERAGE GRADIENT ANGLE PLOT (STATIC) ----
-@app.callback(
-    Output('avg-gradient-angle-plot', 'figure'),
-    Input('play-pause-btn', 'n_clicks'),  # Any input to trigger initial load
-    prevent_initial_call=False
-)
-def update_avg_gradient_plot(n_clicks):
-    # This plot doesn't change, so just return the static figure
-    gif_frames = load_gif_frames(DEFAULT_RUN)
-    total_epochs = len(gif_frames)
-    return make_avg_gradient_angle_fig(total_epochs)
+
 
 # ---- CALLBACK: UPDATE AGGREGATED ANALYSIS PLOTS (STATIC) ----
 @app.callback(
     Output('avg-loss-landscape', 'figure'),
-    Output('avg-curvature-dist', 'figure'),
-    Output('eigenvalue-evolution-summary', 'figure'),
-    Input('play-pause-btn', 'n_clicks'),  # Any input to trigger initial load
+    Input('play-pause-btn', 'n_clicks'),
+    Input('run-selector', 'value'),
     prevent_initial_call=False
 )
-def update_aggregated_plots(n_clicks):
-    # These plots don't change with epochs, so generate them once
-    gif_frames = load_gif_frames(DEFAULT_RUN)
+def update_aggregated_plots(n_clicks, run_folder):
+    # Update plot when dataset changes
+    gif_frames = load_gif_frames(run_folder)
     total_epochs = len(gif_frames)
     avg_landscape_fig = make_avg_loss_landscape(total_epochs)
-    avg_curvature_fig = make_avg_curvature_distribution(total_epochs)
-    eigenvalue_summary_fig = make_eigenvalue_evolution_summary(total_epochs)
-    return avg_landscape_fig, avg_curvature_fig, eigenvalue_summary_fig
+    return avg_landscape_fig
 
 # ---- CALLBACK: UPDATE ADVANCED ANALYSIS EVOLUTION PLOTS (STATIC) ----
 @app.callback(
@@ -2964,20 +2751,26 @@ def update_dynamic_title(run_folder):
     title = f"{method}-based Loss Landscape Visualization | Architecture: {arch} | Dataset: {dataset}"
     return title
 @app.callback(
-    Output('complexity-evolution-plot', 'figure'),
-    Output('critical-points-evolution-plot', 'figure'),
+    # Output('critical-points-evolution-plot', 'figure'),
     Output('sharpness-evolution-plot', 'figure'),
-    Input('play-pause-btn', 'n_clicks'),  # Any input to trigger initial load
+    Input('gif-slider', 'value'),
+    Input('play-pause-btn', 'n_clicks'),
+    Input('run-selector', 'value'),
     prevent_initial_call=False
 )
-def update_advanced_evolution_plots(n_clicks):
-    # These evolution plots show data across all epochs, so generate them once
-    gif_frames = load_gif_frames(DEFAULT_RUN)
-    total_epochs = len(gif_frames)
-    complexity_evolution_fig = make_complexity_evolution_plot(total_epochs)
-    critical_points_evolution_fig = make_critical_points_evolution_plot(total_epochs)
-    sharpness_evolution_fig = make_sharpness_evolution_plot(total_epochs)
-    return complexity_evolution_fig, critical_points_evolution_fig, sharpness_evolution_fig
+def update_advanced_evolution_plots(slider_value, n_clicks, run_folder):
+    import dash
+    ctx = dash.callback_context
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    # Only update if user interacts with slider or play/pause button
+    if triggered_id in ['gif-slider', 'play-pause-btn']:
+        gif_frames = load_gif_frames(run_folder)
+        total_epochs = len(gif_frames)
+        # critical_points_evolution_fig = make_critical_points_evolution_plot(total_epochs, run_folder=run_folder)
+        sharpness_evolution_fig = make_sharpness_evolution_plot(total_epochs, current_epoch=slider_value, run_folder=run_folder)
+        return sharpness_evolution_fig
+    else:
+        return dash.no_update
 
 if __name__ == '__main__':
     app.run(debug=True)
